@@ -218,6 +218,25 @@
       display: none;
     }
 
+    /* Close button */
+    .close-btn {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      width: 24px;
+      height: 24px;
+      background-color: rgba(0,0,0,0.5);
+      color: white;
+      border: none;
+      border-radius: 12px;
+      font-size: 16px;
+      cursor: pointer;
+      z-index: 3;
+    }
+    .close-btn:hover {
+      background-color: rgba(0,0,0,0.7);
+    }
+
     /* Animations */
     @keyframes pulse {
       0% {
@@ -346,6 +365,8 @@
       <div class="progress-bar"></div>
       <div class="progress-glow"></div>
     </div>
+
+    <button class="close-btn" title="Close">✕</button>
   </div>
 
   <script>
@@ -732,6 +753,15 @@
     document.addEventListener('DOMContentLoaded', () => {
       initializeUI();
       registerEventListeners();
+
+      const closeBtn = document.querySelector('.close-btn');
+      if (closeBtn) {
+        closeBtn.addEventListener('click', () => {
+          state.isCancelled = true;
+          stopRecording();
+          window.close();
+        });
+      }
     });
 
     // Add keyboard shortcut listener
