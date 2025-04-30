@@ -45,7 +45,8 @@
       ]
     },
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "build/icon.ico"
     },
     "linux": {
       "target": "AppImage",
@@ -53,7 +54,8 @@
     }
   },
   "os": [
-    "darwin"
+    "darwin",
+    "win32"
   ],
   "engines": {
     "node": ">=18.0.0"

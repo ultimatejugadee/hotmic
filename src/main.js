@@ -24,6 +24,9 @@ import { fetch } from 'undici';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Check if running on macOS
+const isMac = process.platform === 'darwin';
+
 /**
  * Application Configuration
  */
@@ -287,13 +290,13 @@ function createTray() {
     }
 
     // Create native image from file
-    const trayIcon = nativeImage.createFromPath(path.join(__dirname, '../public/icons/32x32.png'));
+    const trayIcon = nativeImage.createFromPath(path.join(__dirname, '..', 'public', 'icons', '32x32.png'));
 
     // Create tray with template image
     tray = new Tray(trayIcon);
 
-    // Check if we're showing in the dock
-    const showingInDock = !app.dock.isVisible();
+    // Check if we're showing in the dock (macOS only)
+    const showingInDock = isMac ? !app.dock.isVisible() : false;
 
     // Create context menu
     const contextMenu = Menu.buildFromTemplate([
@@ -313,13 +316,15 @@ function createTray() {
         }
       },
       { type: 'separator' },
-      {
-        label: 'Show in Dock',
-        type: 'checkbox',
-        checked: showingInDock,
-        click: () => toggleDockVisibility()
-      },
-      { type: 'separator' },
+      ...(isMac ? [
+        {
+          label: 'Show in Dock',
+          type: 'checkbox',
+          checked: showingInDock,
+          click: () => toggleDockVisibility()
+        },
+        { type: 'separator' },
+      ] : []),
       {
         label: 'Quit',
         click: () => {
@@ -337,9 +342,11 @@ function createTray() {
 }
 
 /**
- * Toggle dock visibility
+ * Toggle dock visibility (macOS only)
  */
 function toggleDockVisibility() {
+  if (!isMac) return;
+  
   if (app.dock.isVisible()) {
     app.dock.hide();
   } else {
@@ -366,13 +373,15 @@ function toggleDockVisibility() {
         }
       },
       { type: 'separator' },
-      {
-        label: 'Show in Dock',
-        type: 'checkbox',
-        checked: showingInDock,
-        click: () => toggleDockVisibility()
-      },
-      { type: 'separator' },
+      ...(isMac ? [
+        {
+          label: 'Show in Dock',
+          type: 'checkbox',
+          checked: showingInDock,
+          click: () => toggleDockVisibility()
+        },
+        { type: 'separator' },
+      ] : []),
       {
         label: 'Quit',
         click: () => {
@@ -439,7 +448,7 @@ function setupIPCHandlers() {
   });
 
   ipcMain.handle('get-shortcut', () => {
-    return store.get('shortcut') || 'Command+Shift+Space';
+    return store.get('shortcut') || (isMac ? 'Command+Shift+Space' : 'Control+Shift+Space');
   });
 
   // Prompt settings
@@ -510,8 +519,8 @@ async function initialize() {
   await app.whenReady();
 
   try {
-    // Hide dock only if not configured to show
-    if (!store.get('showInDock', false)) {
+    // Hide dock only if not configured to show (macOS only)
+    if (isMac && !store.get('showInDock', false)) {
       app.dock.hide();
     }
 
@@ -522,7 +531,7 @@ async function initialize() {
     createTray();
 
     // Register global shortcut
-    const shortcut = store.get('shortcut') || 'Command+Shift+Space';
+    const shortcut = store.get('shortcut') || (isMac ? 'Command+Shift+Space' : 'Control+Shift+Space');
     globalShortcut.register(shortcut, toggleRecording);
 
     // Handle app activation
@@ -581,22 +590,25 @@ function createMainWindow() {
     show: false,
     skipTaskbar: false,
     title: 'HotMic',
-    titleBarStyle: 'hiddenInset',
+    // Use titleBarStyle only on macOS
+    ...(isMac ? { titleBarStyle: 'hiddenInset' } : {}),
     backgroundColor: '#00000000'
   });
 
-  mainWindow.loadFile(path.join(__dirname, '../public/index.html'));
+  mainWindow.loadFile(path.join(__dirname, '..', 'public', 'index.html'));
 
-  // Show in App Switcher when window is shown
+  // Show in App Switcher when window is shown (macOS specific)
   mainWindow.on('show', () => {
-    // Show in dock temporarily while window is open
-    app.dock.show();
+    // Show in dock temporarily while window is open (macOS only)
+    if (isMac) {
+      app.dock.show();
+    }
   });
 
   // Remove from App Switcher when window is hidden
   mainWindow.on('hide', () => {
-    // Hide dock if it's not meant to be visible
-    if (!store.get('showInDock', false)) {
+    // Hide dock if it's not meant to be visible (macOS only)
+    if (isMac && !store.get('showInDock', false)) {
       app.dock.hide();
     }
   });
@@ -644,9 +656,6 @@ function createOverlayWindow() {
     skipTaskbar: true,
     alwaysOnTop: true,
     show: false,
-    frame: false,
-    vibrancy: null,
-    visualEffectState: 'active',
     webPreferences: {
       preload: path.join(__dirname, 'preload.mjs'),
       contextIsolation: true,
@@ -656,7 +665,7 @@ function createOverlayWindow() {
     }
   });
 
-  overlayWindow.loadFile(path.join(__dirname, '../public/overlay.html'));
+  overlayWindow.loadFile(path.join(__dirname, '..', 'public', 'overlay.html'));
 
   overlayWindow.once('ready-to-show', () => {
     overlayWindow.show();
