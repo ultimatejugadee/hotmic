@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld('api', {
   // Settings management
   getApiKey: () => ipcRenderer.invoke('get-api-key'),
   setApiKey: (key) => ipcRenderer.invoke('set-api-key', key),
+  getProviderSettings: () => ipcRenderer.invoke('get-provider-settings'),
+  setProviderSettings: (settings) => ipcRenderer.invoke('set-provider-settings', settings),
   getShortcut: () => ipcRenderer.invoke('get-shortcut'),
   setShortcut: (shortcut) => ipcRenderer.invoke('set-shortcut', shortcut),
   getPromptSettings: () => ipcRenderer.invoke('get-prompt-settings'),

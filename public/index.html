@@ -581,12 +581,27 @@
 
       <!-- Transcription Tab -->
       <div class="tab-panel" id="transcription-panel">
-        <div class="form-group">
+        <div class="form-group" id="provider-settings">
           <h3>API Configuration</h3>
-          <label for="apiKey">Groq API Key:</label>
-          <div style="display: flex; gap: var(--spacing-sm);">
-            <input type="password" id="apiKey" placeholder="Enter your Groq API key">
-            <button id="saveApiKey" class="primary">Save</button>
+          <div style="margin-bottom: var(--spacing-sm);">
+            <label for="providerSelect">Service Provider:</label>
+            <select id="providerSelect" style="width: 100%; padding: var(--spacing-sm); border-radius: var(--radius-sm); border: 1px solid var(--control-border); background: var(--input-background); color: var(--text);">
+              <option value="google">Google (Gemini)</option>
+              <option value="groq">Groq</option>
+              <option value="openai">OpenAI</option>
+            </select>
+          </div>
+          <div style="margin-bottom: var(--spacing-sm);">
+            <label id="apiKeyLabel" for="apiKey">API Key:</label>
+            <div style="display: flex; gap: var(--spacing-sm);">
+              <input type="password" id="apiKey" placeholder="Enter your API key">
+              <button id="saveApiKey" class="primary">Save Config</button>
+            </div>
+          </div>
+          <div style="margin-bottom: var(--spacing-sm);">
+            <label for="modelSelect">Model:</label>
+            <select id="modelSelect" style="width: 100%; padding: var(--spacing-sm); border-radius: var(--radius-sm); border: 1px solid var(--control-border); background: var(--input-background); color: var(--text);"></select>
+            <input type="text" id="customModelInput" style="display:none; margin-top: var(--spacing-sm);" placeholder="Enter custom model name...">
           </div>
           <div id="apiKeyStatus" class="status"></div>
         </div>
@@ -637,6 +652,10 @@
     // Application references
     const elements = {
       // API Key elements
+      providerSelect: document.getElementById('providerSelect'),
+      modelSelect: document.getElementById('modelSelect'),
+      customModelInput: document.getElementById('customModelInput'),
+      apiKeyLabel: document.getElementById('apiKeyLabel'),
       apiKeyInput: document.getElementById('apiKey'),
       saveApiKeyBtn: document.getElementById('saveApiKey'),
       apiKeyStatus: document.getElementById('apiKeyStatus'),
@@ -670,7 +689,7 @@
     // Load settings from store
     async function loadSettings() {
       try {
-        await loadApiKey();
+        await loadProviderSettings();
         await loadShortcut();
         await loadPromptSettings();
         await loadHistory();
@@ -679,13 +698,83 @@
       }
     }
 
+    const models = {
+      google: [
+        { id: 'gemini-3.1-flash-lite-preview', name: 'Gemini 3.1 Flash-Lite' },
+        { id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash' },
+        { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro' },
+        { id: 'custom', name: 'Custom...' }
+      ],
+      groq: [
+        { id: 'whisper-large-v3', name: 'Whisper Large v3' },
+        { id: 'whisper-large-v3-turbo', name: 'Whisper Large v3 Turbo' },
+        { id: 'distil-whisper-large-v3-en', name: 'Distil Whisper Large v3 EN' },
+        { id: 'custom', name: 'Custom...' }
+      ],
+      openai: [
+        { id: 'whisper-1', name: 'Whisper-1' },
+        { id: 'custom', name: 'Custom...' }
+      ]
+    };
+
+    let currentProviderSettings = {
+      provider: 'groq',
+      model: 'whisper-large-v3',
+      customModel: '',
+      apiKeys: { google: '', groq: '', openai: '' }
+    };
+
     // Load API key from store
-    async function loadApiKey() {
-      const apiKey = await window.api.getApiKey();
-      if (apiKey) {
-        elements.apiKeyInput.value = apiKey;
-        showStatus(elements.apiKeyStatus, 'API key is set', 'success');
+    async function loadProviderSettings() {
+      const settings = await window.api.getProviderSettings();
+      if (settings) {
+        currentProviderSettings = { ...currentProviderSettings, ...settings };
+        elements.providerSelect.value = currentProviderSettings.provider;
+        updateProviderUI(false);
       }
+    }
+
+    function updateProviderUI(isUserAction = true) {
+      const provider = elements.providerSelect.value;
+      const labelMapping = { google: 'Gemini API Key:', groq: 'Groq API Key:', openai: 'OpenAI API Key:' };
+      elements.apiKeyLabel.innerText = labelMapping[provider];
+      elements.apiKeyInput.placeholder = 'Enter your ' + provider.toUpperCase() + ' API key';
+      
+      elements.apiKeyInput.value = currentProviderSettings.apiKeys[provider] || '';
+
+      elements.modelSelect.innerHTML = '';
+      models[provider].forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m.id;
+        opt.innerText = m.name;
+        elements.modelSelect.appendChild(opt);
+      });
+
+      if (!isUserAction) {
+        if (currentProviderSettings.model) {
+          elements.modelSelect.value = currentProviderSettings.model;
+        }
+        if (currentProviderSettings.customModel) {
+          elements.customModelInput.value = currentProviderSettings.customModel;
+        }
+      }
+
+      updateModelUI();
+    }
+
+    function updateModelUI() {
+      if (elements.modelSelect.value === 'custom') {
+        elements.customModelInput.style.display = 'block';
+      } else {
+        elements.customModelInput.style.display = 'none';
+      }
+    }
+
+    if (elements.providerSelect) {
+      elements.providerSelect.addEventListener('change', () => updateProviderUI(true));
+    }
+    if (elements.modelSelect) {
+      elements.modelSelect.addEventListener('change', updateModelUI);
     }
 
     // Load shortcut from store
@@ -715,20 +804,23 @@
       await savePromptSettings();
     }
 
-    // Save API key to store
+    // Save settings to store
     async function saveApiKey() {
+      const provider = elements.providerSelect.value;
       const apiKey = elements.apiKeyInput.value.trim();
+      const model = elements.modelSelect.value;
+      const customModel = elements.customModelInput.value.trim();
 
-      if (!apiKey) {
-        showStatus(elements.apiKeyStatus, 'Please enter an API key', 'error');
-        return;
-      }
+      currentProviderSettings.provider = provider;
+      currentProviderSettings.apiKeys[provider] = apiKey;
+      currentProviderSettings.model = model;
+      currentProviderSettings.customModel = model === 'custom' ? customModel : '';
 
       try {
-        await window.api.setApiKey(apiKey);
-        showStatus(elements.apiKeyStatus, 'API key saved successfully', 'success');
+        await window.api.setProviderSettings(currentProviderSettings);
+        showStatus(elements.apiKeyStatus, 'Configuration saved successfully', 'success');
       } catch (error) {
-        showStatus(elements.apiKeyStatus, `Error saving API key: ${error.message}`, 'error');
+        showStatus(elements.apiKeyStatus, `Error saving config: ${error.message}`, 'error');
       }
     }
 

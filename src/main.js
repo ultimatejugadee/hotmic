@@ -82,9 +82,11 @@ function addToHistory(rawText, processedText) {
  * Post-Processing with Groq
  */
 async function postProcessTranscript(text) {
-  const apiKey = store.get('apiKey');
+  const providerSettings = store.get('providerSettings', { apiKeys: {} });
+  const apiKey = providerSettings.apiKeys?.groq || store.get('apiKey');
+  
   if (!apiKey) {
-    throw new Error('API key not set');
+    throw new Error('Groq API key not set for post-processing');
   }
 
   const promptSettings = store.get('promptSettings', {
@@ -139,56 +141,70 @@ async function postProcessTranscript(text) {
  * API and Transcription
  */
 async function transcribeAudio(audioBuffer) {
-  const apiKey = store.get('apiKey');
+  const providerSettings = store.get('providerSettings', {
+    provider: 'groq',
+    model: 'whisper-large-v3',
+    customModel: '',
+    apiKeys: {
+      google: '',
+      groq: store.get('apiKey') || '',
+      openai: ''
+    }
+  });
+
+  const provider = providerSettings.provider;
+  const apiKey = providerSettings.apiKeys[provider];
+  const model = providerSettings.customModel || providerSettings.model;
+
   if (!apiKey) {
-    throw new Error('API key not set. Please configure in settings.');
+    throw new Error(`${provider.toUpperCase()} API key not set. Please configure in settings.`);
   }
 
   let tempFile = null;
   try {
-    updateTranscriptionProgress('start', 'Starting transcription...');
+    updateTranscriptionProgress('start', `Starting transcription with ${provider}...`);
 
-    // Save audio to temp file
-    tempFile = path.join(tempDir, `recording-${Date.now()}.wav`);
-    fs.writeFileSync(tempFile, Buffer.from(audioBuffer));
+    let rawTranscript = '';
 
-    updateTranscriptionProgress('api', 'Sending to Groq API...');
+    if (provider === 'google') {
+      // Gemini expects base64 payload
+      updateTranscriptionProgress('api', 'Sending to Google Gemini API...');
+      const base64Data = Buffer.from(audioBuffer).toString('base64');
+      rawTranscript = await sendToGeminiAPI(apiKey, model, base64Data);
+    } else {
+      // Create a temporary file for Whisper backends
+      tempFile = path.join(tempDir, `recording-${Date.now()}.webm`);
+      fs.writeFileSync(tempFile, Buffer.from(audioBuffer));
 
-    // Send to Groq API for transcription
-    const rawTranscript = await sendToGroqAPI(apiKey, tempFile);
+      updateTranscriptionProgress('api', `Sending to ${provider} API...`);
+      rawTranscript = await sendToWhisperAPI(provider, apiKey, model, tempFile);
+    }
 
-    // If we get here and rawTranscript is empty, don't proceed
     if (!rawTranscript?.trim()) {
       updateTranscriptionProgress('error', 'No speech detected');
       setTimeout(() => closeOverlayWindow(), 2000);
       return;
     }
 
-    // Post-process with Groq if enabled
     updateTranscriptionProgress('processing', 'Post-processing transcript...');
     const processedTranscript = await postProcessTranscript(rawTranscript);
 
-    // Add to history only if we have valid transcripts
     if (processedTranscript?.trim()) {
       addToHistory(rawTranscript, processedTranscript);
-      // Copy processed version to clipboard
       updateTranscriptionProgress('complete', 'Processing complete');
       clipboard.writeText(processedTranscript);
     } else {
       updateTranscriptionProgress('error', 'Failed to process transcript');
     }
 
-    // Close overlay after a delay
     setTimeout(() => closeOverlayWindow(), 1500);
 
     return processedTranscript;
   } catch (error) {
     updateTranscriptionProgress('error', `Error: ${error.message}`);
-    // Close overlay after a delay
     setTimeout(() => closeOverlayWindow(), 2000);
     throw error;
   } finally {
-    // Clean up temp file
     if (tempFile && fs.existsSync(tempFile)) {
       fs.unlinkSync(tempFile);
     }
@@ -201,19 +217,60 @@ function updateTranscriptionProgress(step, message) {
   }
 }
 
-async function sendToGroqAPI(apiKey, audioFilePath) {
-  // Create form data for API request
+async function sendToGeminiAPI(apiKey, model, base64Data) {
+  const promptSettings = store.get('promptSettings', { enabled: false, prompt: '' });
+  let systemPrompt = "Transcribe audio to text accurately. Do not include any introductory or concluding remarks. Output ONLY the transcribed text.";
+  
+  const payload = {
+    contents: [{
+      parts: [
+        { inlineData: { mimeType: "audio/webm", data: base64Data } }
+      ]
+    }],
+    systemInstruction: { parts: [{ text: systemPrompt }] },
+    generationConfig: {
+      temperature: 0.0,
+      maxOutputTokens: 1000,
+      thinkingConfig: { thinkingLevel: "MINIMAL" }
+    }
+  };
+
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const errData = await response.json().catch(() => ({}));
+    throw new Error(errData.error?.message || "Google API Error");
+  }
+
+  const data = await response.json();
+  const transcript = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  
+  if (!transcript.trim()) {
+    throw new Error('No speech detected in audio');
+  }
+
+  return transcript;
+}
+
+async function sendToWhisperAPI(provider, apiKey, model, audioFilePath) {
   const formData = new FormData();
   formData.append('file', fs.createReadStream(audioFilePath));
-  formData.append('model', 'whisper-large-v3');
+  formData.append('model', model);
 
-  // Send request to Groq API
+  const urlPath = provider === 'groq' 
+    ? '/openai/v1/audio/transcriptions'
+    : '/v1/audio/transcriptions';
+  const hostname = provider === 'groq' ? 'api.groq.com' : 'api.openai.com';
+
   const response = await new Promise((resolve, reject) => {
     const formHeaders = formData.getHeaders();
-
     const options = {
-      hostname: 'api.groq.com',
-      path: '/openai/v1/audio/transcriptions',
+      hostname,
+      path: urlPath,
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${apiKey}`,
@@ -223,59 +280,40 @@ async function sendToGroqAPI(apiKey, audioFilePath) {
 
     const req = https.request(options, (res) => {
       let data = '';
-
       res.on('data', (chunk) => {
         data += chunk;
         updateTranscriptionProgress('receiving', 'Receiving transcription...');
       });
-
       res.on('end', () => {
         if (res.statusCode >= 200 && res.statusCode < 300) {
           resolve({ ok: true, data });
         } else {
-          console.error('API Error Response:', {
-            statusCode: res.statusCode,
-            data: data
-          });
           resolve({ ok: false, statusCode: res.statusCode, data });
         }
       });
     });
 
-    req.on('error', (error) => {
-      console.error('Request Error:', error);
-      reject(error);
-    });
-
+    req.on('error', reject);
     formData.pipe(req);
   });
 
   if (!response.ok) {
-    console.error('API Error:', response.data);
-    throw new Error(`API error: ${response.data}`);
+    let errMsg = `API error (${response.statusCode})`;
+    try {
+      const parsed = JSON.parse(response.data);
+      if (parsed.error?.message) errMsg = parsed.error.message;
+    } catch (e) {}
+    throw new Error(errMsg);
   }
 
-  try {
-    const result = JSON.parse(response.data);
-    console.log('API Response:', result);
+  const result = JSON.parse(response.data);
+  const transcript = result.text?.trim();
 
-    if (!result || typeof result !== 'object') {
-      throw new Error('Invalid API response format');
-    }
-
-    const transcript = result.text?.trim();
-    console.log('Extracted transcript:', transcript);
-
-    // If no transcript or empty transcript, throw error
-    if (!transcript) {
-      throw new Error('No speech detected in audio');
-    }
-
-    return transcript;
-  } catch (error) {
-    console.error('Error processing API response:', error);
-    throw new Error(`Failed to process API response: ${error.message}`);
+  if (!transcript) {
+    throw new Error('No speech detected in audio');
   }
+
+  return transcript;
 }
 
 /**
@@ -419,7 +457,25 @@ function setupIPCHandlers() {
     }
   });
 
-  // API key management
+  ipcMain.handle('get-provider-settings', () => {
+    return store.get('providerSettings', {
+      provider: 'groq',
+      model: 'whisper-large-v3',
+      customModel: '',
+      apiKeys: {
+        google: '',
+        groq: store.get('apiKey') || '',
+        openai: ''
+      }
+    });
+  });
+
+  ipcMain.handle('set-provider-settings', (event, settings) => {
+    store.set('providerSettings', settings);
+    return true;
+  });
+
+  // API key management (legacy compatibility if needed elsewhere)
   ipcMain.handle('set-api-key', (event, key) => {
     store.set('apiKey', key);
     return true;
@@ -623,8 +679,14 @@ function createMainWindow() {
   });
 
   mainWindow.once('ready-to-show', () => {
-    // Only show on first launch or if API key isn't set
-    if (!store.get('apiKey')) {
+    const providerSettings = store.get('providerSettings', { apiKeys: {} });
+    const hasAnyKey = store.get('apiKey') || 
+                      providerSettings.apiKeys?.google || 
+                      providerSettings.apiKeys?.groq || 
+                      providerSettings.apiKeys?.openai;
+                      
+    // Only show on first launch or if no API keys are set
+    if (!hasAnyKey) {
       mainWindow.show();
     }
   });
