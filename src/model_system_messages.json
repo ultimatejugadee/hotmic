@@ -1,0 +1,4 @@
+{
+  "default": "Transcribe audio to text accurately. Do not include any introductory or concluding remarks. Output ONLY the transcribed text.",
+  "google:gemini-3.1-flash-lite-preview": "Transcribe audio to text accurately in english script keeping the orginal words spoken but written in hinglish or hindi in english script. Do not include any introductory or concluding remarks. Output ONLY the transcribed text in roman script."
+}

@@ -24,6 +24,25 @@ import { fetch } from 'undici';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const systemMessagesFile = path.join(__dirname, 'model_system_messages.json');
+
+function getModelSystemMessages() {
+  if (fs.existsSync(systemMessagesFile)) {
+    try {
+      return JSON.parse(fs.readFileSync(systemMessagesFile, 'utf8'));
+    } catch (e) {
+      console.error('Error reading system messages:', e);
+    }
+  }
+  return {
+    "default": "Transcribe audio to text accurately. Do not include any introductory or concluding remarks. Output ONLY the transcribed text."
+  };
+}
+
+function setModelSystemMessages(messages) {
+  fs.writeFileSync(systemMessagesFile, JSON.stringify(messages, null, 2));
+}
+
 // Check if running on macOS
 const isMac = process.platform === 'darwin';
 
@@ -166,18 +185,26 @@ async function transcribeAudio(audioBuffer) {
 
     let rawTranscript = '';
 
+    const customMessages = getModelSystemMessages();
+    let systemPrompt = customMessages["default"] || "Transcribe audio to text accurately. Do not include any introductory or concluding remarks. Output ONLY the transcribed text.";
+
+    const key = `${provider}:${model}`;
+    if (customMessages[key] && customMessages[key].trim()) {
+      systemPrompt = customMessages[key].trim();
+    }
+
     if (provider === 'google') {
       // Gemini expects base64 payload
       updateTranscriptionProgress('api', 'Sending to Google Gemini API...');
       const base64Data = Buffer.from(audioBuffer).toString('base64');
-      rawTranscript = await sendToGeminiAPI(apiKey, model, base64Data);
+      rawTranscript = await sendToGeminiAPI(apiKey, model, base64Data, systemPrompt);
     } else {
       // Create a temporary file for Whisper backends
       tempFile = path.join(tempDir, `recording-${Date.now()}.webm`);
       fs.writeFileSync(tempFile, Buffer.from(audioBuffer));
 
       updateTranscriptionProgress('api', `Sending to ${provider} API...`);
-      rawTranscript = await sendToWhisperAPI(provider, apiKey, model, tempFile);
+      rawTranscript = await sendToWhisperAPI(provider, apiKey, model, tempFile, systemPrompt);
     }
 
     if (!rawTranscript?.trim()) {
@@ -217,10 +244,7 @@ function updateTranscriptionProgress(step, message) {
   }
 }
 
-async function sendToGeminiAPI(apiKey, model, base64Data) {
-  const promptSettings = store.get('promptSettings', { enabled: false, prompt: '' });
-  let systemPrompt = "Transcribe audio to text accurately. Do not include any introductory or concluding remarks. Output ONLY the transcribed text.";
-  
+async function sendToGeminiAPI(apiKey, model, base64Data, systemPrompt) {
   const payload = {
     contents: [{
       parts: [
@@ -256,10 +280,13 @@ async function sendToGeminiAPI(apiKey, model, base64Data) {
   return transcript;
 }
 
-async function sendToWhisperAPI(provider, apiKey, model, audioFilePath) {
+async function sendToWhisperAPI(provider, apiKey, model, audioFilePath, systemPrompt) {
   const formData = new FormData();
   formData.append('file', fs.createReadStream(audioFilePath));
   formData.append('model', model);
+  if (systemPrompt) {
+    formData.append('prompt', systemPrompt);
+  }
 
   const urlPath = provider === 'groq' 
     ? '/openai/v1/audio/transcriptions'
@@ -472,6 +499,23 @@ function setupIPCHandlers() {
 
   ipcMain.handle('set-provider-settings', (event, settings) => {
     store.set('providerSettings', settings);
+    return true;
+  });
+
+  // System Messages Management
+  ipcMain.handle('get-system-messages', () => {
+    return getModelSystemMessages();
+  });
+
+  ipcMain.handle('set-system-message', (event, { provider, model, message }) => {
+    const msgs = getModelSystemMessages();
+    const key = `${provider}:${model}`;
+    if (!message) {
+      delete msgs[key];
+    } else {
+      msgs[key] = message;
+    }
+    setModelSystemMessages(msgs);
     return true;
   });
 
